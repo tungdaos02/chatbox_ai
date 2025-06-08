@@ -1,0 +1,15 @@
+chromadb==0.6.0
+packaging==24.0
+langchain-chroma==0.2.3
+langchain-core==0.3.59
+langchain-ollama
+gradio
+pypdf
+unstructured
+python-dotenv
+beautifulsoup4
+sentence-transformers
+langchain
+markdown
+langchain_community
+rapidfuzz
