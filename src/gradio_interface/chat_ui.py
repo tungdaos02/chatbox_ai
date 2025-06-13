@@ -14,7 +14,6 @@ from src.data_processing.image_matcher import ImageMatcher
 from langchain_community.vectorstores import Chroma  
 from langchain_community.retrievers import BM25Retriever
 from langchain.retrievers import EnsembleRetriever
-from transformers import AutoTokenizer, T5ForConditionalGeneration,T5Tokenizer
 from sklearn.feature_extraction.text import TfidfVectorizer
 import numpy as np
 class ChatUI:
@@ -45,29 +44,9 @@ class ChatUI:
             if not documents:
                 print("Warning: No documents found for BM25 retriever")
                 return dense_retriever
-            # print("\n--- Dense Retriever Results ---")
-            # test_query = "yykyukyuk"
-            # dense_results = dense_retriever.invoke(test_query)
-            
-            # for i, doc in enumerate(dense_results):
-            #     print(f"\nDocument {i+1}:")
-            #     print(f"Content: {doc.page_content[:500]}...")  # In 200 ký tự đầu
-            #     print(f"Score: {doc.metadata.get('score', 'N/A')}")    
             try:
                 # Try using EnsembleRetriever
                 sparse_retriever = BM25Retriever.from_documents(documents)
-                # print("\n--- Sparse (BM25) Retriever Results ---")
-                # sparse_results = sparse_retriever.invoke(test_query)
-                # for i, doc in enumerate(sparse_results):
-                    # print(f"\nDocument {i+1}:")
-                    # print(f"Content: {doc.page_content[:500]}...")
-                    # # BM25 score được tính trong quá trình retrieve
-                    # print(f"BM25 Rank: {i+1}")
-                # ensemble_retriever = EnsembleRetriever(
-                #     retrievers=[dense_retriever, sparse_retriever],
-                #     weights=[0.8, 0.2])
-                # docs = ensemble_retriever.invoke(test_query)
-                # print(f'7777777777777777777 \\n{docs}')
                 return EnsembleRetriever(
                     retrievers=[dense_retriever, sparse_retriever],
                     weights=[0.8, 0.2]
@@ -244,19 +223,16 @@ class ChatUI:
 
             # Bước 1: Tạo HyDE document
             hyde_document = self._generate_hyde_document(message)
-            print("11111111111111111111111111111111111111111111")
-            # print(f"HyDE llm trả lời ko dùng retrived:\\n {hyde_document}...")
-            #Bước 2: Hybrid retrieval sử dụng HyDE document
+
+            # Bước 2: Lấy documents từ hybrid retriever
             docs = self.hybrid_retriever.invoke(hyde_document)
-            print("222222222222222222222222222222222222222222222")
-            # print(f"Retrieved lấy k vector data tương đồng với câu trả lời HyDE \\n{docs} ")
-            # Bước 3: Rerank documents với monoT5
+
+            # Bước 3: Rerank documents với basic ranking
             if docs:
                 docs = self._basic_ranking(message, docs)[:Config.RETRIEVE_TOP_K]
             # Tạo context
             context = "\n\n".join([d.page_content for d in docs]) if docs else ""
-            print("333333333333333333333333333333333333333333333")
-            # print(F'=========Tạo Context:\\n{context}==========')
+
             # Tạo prompt
             formatted_prompt = self.prompt.format(
                 context=context,
