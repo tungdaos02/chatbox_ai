@@ -3,6 +3,8 @@ from src.gradio_interface.chat_ui import create_chat_interface
 import gradio as gr
 import signal
 import sys
+import torch
+
 
 def graceful_exit(signum, frame):
     sys.exit(0)
@@ -12,7 +14,6 @@ def main():
     
     vector_store = initialize_vector_store()
     demo = create_chat_interface(vector_store)
-    
     try:
         demo.launch(
             server_name="0.0.0.0",

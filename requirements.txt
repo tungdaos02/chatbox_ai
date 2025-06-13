@@ -13,3 +13,9 @@ langchain
 markdown
 langchain_community
 rapidfuzz
+transformers
+sentencepiece
+rank_bm25
+pyvi
+langchain-huggingface
+pdfminer.six

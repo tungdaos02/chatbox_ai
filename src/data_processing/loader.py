@@ -18,27 +18,26 @@ import fitz  # PyMuPDF
 import base64
 from PIL import Image
 import pandas as pd
+from pdfminer.high_level import extract_text
 
 class DataLoader:
     def __init__(self):
         self.allowed_types = Config.ALLOWED_FILE_TYPES
         self.allowed_domains = Config.ALLOWED_DOMAINS
-        pipeline_options = PdfPipelineOptions()
-        pipeline_options.do_ocr = True
-        pipeline_options.do_table_structure = True
-        pipeline_options.table_structure_options.do_cell_matching = False
-        pipeline_options.table_structure_options.mode = TableFormerMode.ACCURATE
-
-        self.converter = DocumentConverter(
-            format_options={
-                InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
-            }
-        )
 
     def _clean_content(self, content):
         content = re.sub(r'\s+', ' ', content)
         content = re.sub(r'<[^>]+>', '', content)
         return content.strip()[:5000]
+    
+    def _extract_text_from_pdf(self, file_path):
+        """
+        Extract text from PDF using pdfminer
+        """
+        try:
+            return extract_text(file_path)
+        except Exception as e:
+            raise ValueError(f"Error extracting text from PDF: {e}")
 
     def load_file(self, file_path):
         try:
@@ -46,12 +45,11 @@ class DataLoader:
             
             if ext == ".pdf":
                 try:
-                    print(f"Starting PDF conversion: {file_path}")
+                    print(f"Starting PDF text extraction: {file_path}")
                     start_time = time.time()
-                    result = self.converter.convert(file_path)
+                    content = self._extract_text_from_pdf(file_path)
                     end_time = time.time()
-                    print(f"PDF conversion completed in {end_time - start_time:.2f} seconds")
-                    content = result.document.export_to_markdown()
+                    print(f"PDF text extraction completed in {end_time - start_time:.2f} seconds")
 
                     # Create Document object with proper metadata
                     return [Document(
@@ -78,5 +76,4 @@ class DataLoader:
             page_content=self._clean_content(doc.page_content),
             metadata={"source": url, **doc.metadata}
         ) for doc in docs]
-    
     

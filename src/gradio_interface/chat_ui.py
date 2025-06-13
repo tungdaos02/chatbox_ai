@@ -11,7 +11,12 @@ from src.data_processing.splitter import create_text_splitter
 from src.rag_chain.retriever import create_prompt
 from src.rag_chain.generator import create_llm
 from src.data_processing.image_matcher import ImageMatcher
-from langchain.vectorstores import Chroma
+from langchain_community.vectorstores import Chroma  
+from langchain_community.retrievers import BM25Retriever
+from langchain.retrievers import EnsembleRetriever
+from transformers import AutoTokenizer, T5ForConditionalGeneration,T5Tokenizer
+from sklearn.feature_extraction.text import TfidfVectorizer
+import numpy as np
 class ChatUI:
     def __init__(self, vector_store: Chroma):
         self.vector_store = vector_store
@@ -27,6 +32,97 @@ class ChatUI:
         .references { color: #666; font-size: 0.9em; }
         .warning { color: #ff4b4b; }
         """
+        self.hybrid_retriever = self._init_hybrid_retriever()
+    
+    def _init_hybrid_retriever(self):
+        """Khởi tạo hybrid retriever kết hợp vector và BM25"""
+        try:
+            dense_retriever = self.vector_store.as_retriever(
+                search_type="similarity_score_threshold",
+                search_kwargs={'score_threshold': 0.7}
+            )
+            documents = self._get_all_documents()
+            if not documents:
+                print("Warning: No documents found for BM25 retriever")
+                return dense_retriever
+            # print("\n--- Dense Retriever Results ---")
+            # test_query = "yykyukyuk"
+            # dense_results = dense_retriever.invoke(test_query)
+            
+            # for i, doc in enumerate(dense_results):
+            #     print(f"\nDocument {i+1}:")
+            #     print(f"Content: {doc.page_content[:500]}...")  # In 200 ký tự đầu
+            #     print(f"Score: {doc.metadata.get('score', 'N/A')}")    
+            try:
+                # Try using EnsembleRetriever
+                sparse_retriever = BM25Retriever.from_documents(documents)
+                # print("\n--- Sparse (BM25) Retriever Results ---")
+                # sparse_results = sparse_retriever.invoke(test_query)
+                # for i, doc in enumerate(sparse_results):
+                    # print(f"\nDocument {i+1}:")
+                    # print(f"Content: {doc.page_content[:500]}...")
+                    # # BM25 score được tính trong quá trình retrieve
+                    # print(f"BM25 Rank: {i+1}")
+                # ensemble_retriever = EnsembleRetriever(
+                #     retrievers=[dense_retriever, sparse_retriever],
+                #     weights=[0.8, 0.2])
+                # docs = ensemble_retriever.invoke(test_query)
+                # print(f'7777777777777777777 \\n{docs}')
+                return EnsembleRetriever(
+                    retrievers=[dense_retriever, sparse_retriever],
+                    weights=[0.8, 0.2]
+                )
+                
+            except ImportError:
+                # Fallback to basic weighted combination
+                print("Falling back to basic weighted combination of retrievers")
+                def combined_retriever(query):
+                    dense_docs = dense_retriever.invoke(query)
+                    sparse_docs = sparse_retriever.invoke(query)
+                    
+                    # Combine and deduplicate results
+                    seen = set()
+                    combined_docs = []
+                    for doc in (dense_docs + sparse_docs):
+                        if doc.page_content not in seen:
+                            seen.add(doc.page_content)
+                            combined_docs.append(doc)
+                    
+                    return combined_docs[:Config.RETRIEVE_TOP_K]
+                    
+                return combined_retriever
+            
+        except Exception as e:
+            print(f"Error initializing hybrid retriever: {e}")
+            return self.vector_store.as_retriever()  # Fallback to dense retriever
+
+    def _generate_hyde_document(self, query):
+        """Tạo pseudo-document với HyDE"""
+        prompt = f"""
+        Hãy viết một đoạn văn bản trả lời mẫu cho câu hỏi sau. 
+        Đoạn văn nên chứa thông tin chính xác và tóm tắt câu trả lời cho câu hỏi không quá 500 ký tự.
+        Đoạn văn này sẽ được sử dụng để tìm kiếm thông tin liên quan trong cơ sở dữ liệu của chúng tôi.:
+        
+        Câu hỏi: {query}
+        """
+        return self.llm.invoke(prompt)
+
+    def _basic_ranking(self, query, documents):
+        """Basic ranking using TF-IDF similarity"""
+        
+        # Create TF-IDF vectors
+        tfidf = TfidfVectorizer()
+        doc_vectors = tfidf.fit_transform([doc.page_content for doc in documents])
+        query_vector = tfidf.transform([query])
+        
+        # Calculate similarities
+        similarities = (query_vector @ doc_vectors.T).toarray()[0]
+        
+        # Sort documents by similarity
+        sorted_pairs = sorted(zip(documents, similarities), key=lambda x: x[1], reverse=True)
+        return [doc for doc, _ in sorted_pairs]
+
+   
     def _load_history(self):
         try:
             with open(self.history_file, "r", encoding='utf-8') as f:
@@ -138,55 +234,58 @@ class ChatUI:
         """Xử lý chat message"""
         try:
             # Convert chat history từ gradio format
-            messages = []
+            history_message = []
             for user_msg, bot_msg in chat_history:
-                messages.extend([
+                history_message.extend([
                     {"role": "user", "content": user_msg},
                     {"role": "assistant", "content": bot_msg}
                 ])
                 
-            #   
-            docs_and_score = self.vector_store.similarity_search_with_score(
-                message, 
-                k=Config.RETRIEVE_TOP_K
-            )
-            
-            filtered_docs = []
-            for doc, score in docs_and_score:
-                print(f"Document: {doc}")  # Log document source
-                print(f'=================Score: {score}===================')  # Log score
-                if score < 0.3:
-                    filtered_docs.append(doc)
-            # Tạo context và prompt
-            context = "\n\n".join([d.page_content for d in filtered_docs])
-            print(f"Context for prompt: {context}...")  # Log context
+
+            # Bước 1: Tạo HyDE document
+            hyde_document = self._generate_hyde_document(message)
+            print("11111111111111111111111111111111111111111111")
+            # print(f"HyDE llm trả lời ko dùng retrived:\\n {hyde_document}...")
+            #Bước 2: Hybrid retrieval sử dụng HyDE document
+            docs = self.hybrid_retriever.invoke(hyde_document)
+            print("222222222222222222222222222222222222222222222")
+            # print(f"Retrieved lấy k vector data tương đồng với câu trả lời HyDE \\n{docs} ")
+            # Bước 3: Rerank documents với monoT5
+            if docs:
+                docs = self._basic_ranking(message, docs)[:Config.RETRIEVE_TOP_K]
+            # Tạo context
+            context = "\n\n".join([d.page_content for d in docs]) if docs else ""
+            print("333333333333333333333333333333333333333333333")
+            # print(F'=========Tạo Context:\\n{context}==========')
+            # Tạo prompt
             formatted_prompt = self.prompt.format(
                 context=context,
                 question=message,
-                chat_history=messages
+                chat_history=history_message
             )
             
-            # Generate response
+            # Tạo response
             response = self.llm.invoke(formatted_prompt)
-            # Truyền thêm message làm query parameter
-            formatted_response = self.format_response(response, filtered_docs, query=message)
+            # Format response
+            formatted_response = self.format_response(response, docs, query=message)
             
-            # Update chat history
-            chat_history.append([message, formatted_response])
+            # Cập nhật lịch sử chat
+            chat_history.append((message, formatted_response))
             
             # Save to file 
-            self.chat_history = messages + [
+            self.chat_history = history_message + [
                 {"role": "user", "content": message},
                 {"role": "assistant", "content": formatted_response}
             ]
             self._save_history()
             
             return "", chat_history
-
         except Exception as e:
-            print(f"Chat error: {str(e)}")  # Thêm logging
-            chat_history.append([message, f"⚠️ Lỗi: {str(e)}"])
+            error_msg = f"⚠️ Lỗi hệ thống: {str(e)}"
+            chat_history.append((message, error_msg))
             return "", chat_history
+
+        
 
     def create_interface(self):
         """Tạo giao diện Gradio"""
@@ -264,6 +363,20 @@ class ChatUI:
         
         # Return empty list để clear UI
         return []
+
+    def _get_all_documents(self):
+        """Lấy tất cả documents từ vector store"""
+        collection = self.vector_store.get()
+        documents = []
+        if collection and "documents" in collection and "metadatas" in collection:
+            for doc, meta in zip(collection["documents"], collection["metadatas"]):
+                documents.append(
+                    Document(
+                        page_content=doc,
+                        metadata=meta
+                    )
+                )
+        return documents
 
 def create_chat_interface(vector_store):
     chat_ui = ChatUI(vector_store)
